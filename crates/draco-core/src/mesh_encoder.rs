@@ -961,6 +961,9 @@ impl MeshEncoder {
         encoder.set_force_predictive(
             self.options.get_global_int("force_predictive_traversal", 0) == 1,
         );
+        encoder.set_forced_traversal(crate::mesh_edgebreaker_encoder::edgebreaker_method_option(
+            &self.options,
+        ));
         let (point_ids, data_to_corner_map, vertex_to_data_map) = encoder.encode_connectivity(
             mesh,
             corner_table,
@@ -1118,10 +1121,30 @@ impl MeshEncoder {
             out_buffer.encode_varint(mesh.num_points() as u64);
         }
 
+        if self.options.get_global_int("compress_connectivity", 0) != 0 {
+            // Compressed connectivity, method byte 0: each index as its
+            // difference from the one before, the sign in the low bit, through
+            // the symbol coder.
+            out_buffer.encode_u8(0);
+            let mut symbols = Vec::with_capacity(mesh.num_faces() * 3);
+            let mut last = 0i64;
+            for face_id in 0..mesh.num_faces() {
+                for point in mesh.face(FaceIndex(face_id as u32)) {
+                    let difference = i64::from(point.0) - last;
+                    symbols.push(((difference.unsigned_abs() << 1) | u64::from(difference < 0)) as u32);
+                    last = i64::from(point.0);
+                }
+            }
+            crate::symbol_encoding::encode_symbols(
+                &symbols,
+                1,
+                &crate::symbol_encoding::SymbolEncodingOptions::default(),
+                out_buffer,
+            )?;
         // Raw connectivity. The method byte goes out even with no faces or no
         // points, as upstream writes it, since its decoder reads it regardless.
-        out_buffer.encode_u8(1);
-        if mesh.num_points() < 256 {
+        } else if mesh.num_points() < 256 {
+            out_buffer.encode_u8(1);
             for face_id in 0..mesh.num_faces() {
                 let face = mesh.face(FaceIndex(face_id as u32));
                 for i in 0..3 {
@@ -1129,6 +1152,7 @@ impl MeshEncoder {
                 }
             }
         } else if mesh.num_points() < 65536 {
+            out_buffer.encode_u8(1);
             for face_id in 0..mesh.num_faces() {
                 let face = mesh.face(FaceIndex(face_id as u32));
                 for i in 0..3 {
@@ -1142,6 +1166,7 @@ impl MeshEncoder {
             // all, so every sequential mesh below 2.2 with 65536 or more
             // points was written unreadable; 1.3 is a claimed version, so
             // this one is a live fix, not just parity.
+            out_buffer.encode_u8(1);
             for face_id in 0..mesh.num_faces() {
                 let face = mesh.face(FaceIndex(face_id as u32));
                 for i in 0..3 {
@@ -1150,6 +1175,7 @@ impl MeshEncoder {
             }
         } else {
             // Default: use u32 for very large meshes
+            out_buffer.encode_u8(1);
             for face_id in 0..mesh.num_faces() {
                 let face = mesh.face(FaceIndex(face_id as u32));
                 for i in 0..3 {
@@ -1346,7 +1372,7 @@ impl MeshEncoder {
                     // Quantized attribute (mapping already applied at start of encode_attributes)
                     let mut q_transform = AttributeQuantizationTransform::new();
                     q_transform
-                        .compute_parameters(att, quantization_bits)
+                        .parameters_for(att, quantization_bits, &self.options, i)
                         .map_err(|e| {
                             DracoError::general(format!(
                                 "Failed to compute quantization parameters: {e}"
@@ -1778,7 +1804,7 @@ impl MeshEncoder {
                         .get_attribute_int(att_id, "quantization_bits", -1);
                 let mut q_transform = AttributeQuantizationTransform::new();
                 q_transform
-                    .compute_parameters(att, quantization_bits)
+                    .parameters_for(att, quantization_bits, &self.options, att_id)
                     .map_err(|e| {
                         DracoError::general(format!(
                             "Failed to compute quantization parameters: {e}"
@@ -2058,12 +2084,16 @@ impl MeshEncoder {
         if major == 0 && minor == 0 {
             (major, minor) = DEFAULT_MESH_VERSION;
         }
+        let force_predictive = self.options.get_global_int("force_predictive_traversal", 0) == 1;
         let traversal = (self.method == 1).then(|| {
-            select_edgebreaker_traversal(
-                self.options.get_speed() as usize,
-                num_faces,
-                self.options.get_global_int("force_predictive_traversal", 0) == 1,
-            )
+            match crate::mesh_edgebreaker_encoder::edgebreaker_method_option(&self.options) {
+                Some(traversal) if !force_predictive => traversal,
+                _ => select_edgebreaker_traversal(
+                    self.options.get_speed() as usize,
+                    num_faces,
+                    force_predictive,
+                ),
+            }
         });
         Ok(EncodedMeshInfo {
             encoding_method: self.method,
@@ -2167,7 +2197,7 @@ impl MeshEncoder {
                 None => {
                     let mut transform = AttributeQuantizationTransform::new();
                     transform
-                        .compute_parameters(att, quantization_bits)
+                        .parameters_for(att, quantization_bits, &self.options, att_id)
                         .map_err(|e| {
                             DracoError::general(format!(
                                 "Failed to compute position quantization parameters: {e}"

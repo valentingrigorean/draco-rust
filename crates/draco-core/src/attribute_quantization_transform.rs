@@ -76,6 +76,29 @@ impl AttributeQuantizationTransform {
         self.threads = threads.max(1);
     }
 
+    /// Takes the explicit grid of `options` for attribute `att_id` when it
+    /// sets one, and otherwise computes the grid from the attribute's bounds.
+    #[cfg(feature = "encoder")]
+    pub(crate) fn parameters_for(
+        &mut self,
+        attribute: &PointAttribute,
+        quantization_bits: i32,
+        options: &crate::encoder_options::EncoderOptions,
+        att_id: i32,
+    ) -> Status {
+        match options.attribute_explicit_quantization(att_id) {
+            None => self.compute_parameters(attribute, quantization_bits),
+            Some(grid) if grid.origin.len() == attribute.num_components() as usize => {
+                self.set_parameters(quantization_bits, &grid.origin, grid.range)
+            }
+            Some(grid) => Err(DracoError::invalid_parameter(format!(
+                "The explicit quantization origin of attribute {att_id} has {} components, not {}",
+                grid.origin.len(),
+                attribute.num_components()
+            ))),
+        }
+    }
+
     pub fn set_parameters(
         &mut self,
         quantization_bits: i32,

@@ -43,6 +43,16 @@ pub struct EncoderOptions {
 struct Inner {
     global_options: HashMap<String, i32>,
     attribute_options: HashMap<i32, HashMap<String, i32>>,
+    explicit_quantization: HashMap<i32, ExplicitQuantization>,
+}
+
+/// A quantization grid stated by the caller rather than computed from the
+/// attribute's bounds: the origin of each component and the range of the
+/// grid along every component.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExplicitQuantization {
+    pub origin: Vec<f32>,
+    pub range: f32,
 }
 
 impl EncoderOptions {
@@ -403,6 +413,34 @@ impl EncoderOptions {
             .entry(att_id)
             .or_default()
             .insert(key.to_string(), value);
+    }
+
+    /// Quantizes attribute `att_id` to `quantization_bits` on the grid that
+    /// starts at `origin`, one value per component, and spans `range` along
+    /// every component, instead of the grid its bounds give.
+    ///
+    /// Encoders that share positions across separately encoded geometries
+    /// use it, so equal inputs land on equal quantized values in each.
+    pub fn set_attribute_explicit_quantization(
+        &mut self,
+        att_id: i32,
+        quantization_bits: i32,
+        origin: &[f32],
+        range: f32,
+    ) {
+        self.set_attribute_int(att_id, "quantization_bits", quantization_bits);
+        Arc::make_mut(&mut self.inner).explicit_quantization.insert(
+            att_id,
+            ExplicitQuantization {
+                origin: origin.to_vec(),
+                range,
+            },
+        );
+    }
+
+    /// The explicit quantization grid of attribute `att_id`, if one is set.
+    pub fn attribute_explicit_quantization(&self, att_id: i32) -> Option<&ExplicitQuantization> {
+        self.inner.explicit_quantization.get(&att_id)
     }
 
     /// Returns an attribute integer option, falling back to the global value.

@@ -305,7 +305,7 @@ impl SequentialIntegerAttributeEncoder {
                 // in encode_data_needed_by_portable_transform)
                 let mut q_transform = AttributeQuantizationTransform::new();
                 q_transform.set_threads(self.threads);
-                q_transform.compute_parameters(attribute, quantization_bits)?;
+                q_transform.parameters_for(attribute, quantization_bits, options, att_id)?;
                 q_transform.transform_attribute(
                     attribute,
                     EntryToPointIdMap::from_point_indices(point_ids),
@@ -1367,7 +1367,7 @@ impl SequentialIntegerAttributeEncoder {
         if uses_inline_quantization_parameters(attribute, options, att_id) {
             let quantization_bits = options.get_attribute_int(att_id, "quantization_bits", -1);
             let mut transform = AttributeQuantizationTransform::new();
-            transform.compute_parameters(attribute, quantization_bits)?;
+            transform.parameters_for(attribute, quantization_bits, options, att_id)?;
             transform.encode_parameters(out_buffer)?;
         }
 

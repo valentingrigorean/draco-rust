@@ -148,6 +148,19 @@ impl EdgebreakerTraversal {
 /// how a version check passes for a traversal the encoder then does not use.
 ///
 /// [`select_mesh_encoding_method`]: crate::mesh_encoder
+/// The traversal the `edgebreaker_method` option of `options` asks for: 0
+/// the standard one and 2 the valence one, or `None` to let the speed and
+/// the face count select it.
+#[cfg(feature = "encoder")]
+pub fn edgebreaker_method_option(options: &crate::encoder_options::EncoderOptions) -> Option<EdgebreakerTraversal> {
+    match options.get_global_int("edgebreaker_method", -1) {
+        0 => Some(EdgebreakerTraversal::Standard),
+        #[cfg(feature = "edgebreaker_valence_encode")]
+        2 => Some(EdgebreakerTraversal::Valence),
+        _ => None,
+    }
+}
+
 pub fn select_edgebreaker_traversal(
     speed: usize,
     num_faces: usize,
@@ -220,6 +233,7 @@ pub struct MeshEdgebreakerEncoder {
     /// standard/valence. Uses the standard traversal to collect symbols, then a
     /// post-pass replays them to build the prediction + main symbol streams.
     force_predictive: bool,
+    forced_traversal: Option<EdgebreakerTraversal>,
 }
 
 impl MeshEdgebreakerEncoder {
@@ -259,12 +273,19 @@ impl MeshEdgebreakerEncoder {
             #[cfg(feature = "edgebreaker_valence_encode")]
             valence_encoder: None,
             force_predictive: false,
+            forced_traversal: None,
         }
     }
 
     /// Selects the legacy predictive (type-1) traversal for the next encode.
     pub fn set_force_predictive(&mut self, force: bool) {
         self.force_predictive = force;
+    }
+
+    /// Uses `traversal` whatever the speed and the face count would select,
+    /// as the `edgebreaker_method` option asks.
+    pub fn set_forced_traversal(&mut self, traversal: Option<EdgebreakerTraversal>) {
+        self.forced_traversal = traversal;
     }
 
     /// Find the starting corner for encoding a component.
@@ -359,8 +380,10 @@ impl MeshEdgebreakerEncoder {
         self.prediction_degree_is_expressible =
             bitstream_version == 0 || bitstream_version >= 0x0102;
 
-        self.traversal =
-            select_edgebreaker_traversal(speed, mesh.num_faces(), self.force_predictive);
+        self.traversal = match self.forced_traversal {
+            Some(traversal) if !self.force_predictive => traversal,
+            _ => select_edgebreaker_traversal(speed, mesh.num_faces(), self.force_predictive),
+        };
 
         #[cfg(feature = "edgebreaker_valence_encode")]
         if self.traversal == EdgebreakerTraversal::Valence {

@@ -94,7 +94,7 @@ impl KdTreeAttributesEncoder {
                         )));
                     }
                     let mut transform = AttributeQuantizationTransform::new();
-                    transform.compute_parameters(att, quantization_bits)?;
+                    transform.parameters_for(att, quantization_bits, options, att_id)?;
 
                     let mut portable_att = crate::geometry_attribute::PointAttribute::default();
                     portable_att.init(
